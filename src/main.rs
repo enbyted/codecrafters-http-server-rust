@@ -1,31 +1,155 @@
-use std::{net::TcpStream, pin::Pin};
+use std::{collections::HashMap, net::TcpStream, pin::Pin};
 
-use http_server_starter_rust::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, Result};
+use http_server_starter_rust::{
+    HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest, Result,
+};
+use itertools::Itertools;
 use tokio::{io::AsyncRead, net::TcpListener};
 
-async fn try_handle_request(request: HttpRequest) -> Result<HttpResponse> {
-    let request = request.parse()?;
-    let response = if request.method() == HttpMethod::GET && request.path() == "/" {
-        HttpResponse::new(HttpStatus::Ok)
-    } else {
-        HttpResponse::new(HttpStatus::NotFound)
-    };
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum MatchSegment {
+    Const(&'static str),
+    Var,
+}
 
-    Ok(response)
+impl MatchSegment {
+    fn matches(&self, value: Option<&str>) -> bool {
+        match self {
+            Self::Var => value.is_some(),
+            Self::Const(v) => value.map(|value| value == *v).unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct RouteInfo {
+    method: HttpMethod,
+    path: Vec<MatchSegment>,
+}
+
+impl RouteInfo {
+    fn new(method: HttpMethod, pattern: &'static str) -> Self {
+        let path = pattern
+            .split('/')
+            .filter_map(|segment| {
+                if segment.is_empty() {
+                    None
+                } else if segment.starts_with(':') {
+                    Some(MatchSegment::Var)
+                } else {
+                    Some(MatchSegment::Const(segment))
+                }
+            })
+            .collect();
+
+        Self { method, path }
+    }
+
+    fn matches(&self, request: &ParsedHttpRequest<'_>) -> bool {
+        self.method == request.method() && self.match_path(request.path())
+    }
+
+    fn match_path<'a>(&self, mut path: impl Iterator<Item = &'a str>) -> bool {
+        let mut was_none = false;
+        for segment in &self.path {
+            let v = if was_none { None } else { path.next() };
+            was_none = v.is_none();
+            if !segment.matches(v) {
+                return false;
+            }
+        }
+
+        return was_none || path.next().is_none();
+    }
+}
+
+trait Route {
+    fn execute<'data>(&mut self, request: &ParsedHttpRequest<'data>) -> Result<HttpResponse>;
+}
+
+impl std::fmt::Debug for dyn Route {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[Route]")
+    }
+}
+
+impl<T: FnMut(&ParsedHttpRequest<'_>) -> Result<HttpResponse>> Route for T {
+    fn execute(&mut self, request: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+        self(request)
+    }
+}
+
+#[derive(Debug)]
+struct Router {
+    routes: HashMap<RouteInfo, Box<dyn Route>>,
+}
+
+impl Router {
+    fn new() -> Self {
+        Self {
+            routes: HashMap::new(),
+        }
+    }
+
+    fn add_route<T>(&mut self, route: RouteInfo, handler: T)
+    where
+        T: Route + 'static,
+    {
+        self.routes.insert(route, Box::new(handler));
+    }
+}
+
+impl Route for Router {
+    fn execute(&mut self, request: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+        let route = self
+            .routes
+            .iter_mut()
+            .find(|(route, _)| route.matches(request));
+
+        if let Some((_, route)) = route {
+            route.execute(request)
+        } else {
+            Ok(HttpResponse::new(HttpStatus::NotFound))
+        }
+    }
+}
+
+fn handle_root(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+    Ok(HttpResponse::new(HttpStatus::Ok))
+}
+
+fn handle_echo(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+    if let Some((_, value)) = req.path().collect_tuple() {
+        let mut resp = HttpResponse::new(HttpStatus::Ok);
+        resp.set_content(HttpContent::Plain(value.into()));
+        Ok(resp)
+    } else {
+        Ok(HttpResponse::new(HttpStatus::BadRequest))
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let mut router = Router::new();
+
+    router.add_route(RouteInfo::new(HttpMethod::GET, "/"), handle_root);
+    router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/:"), handle_echo);
+
     let listen_addr = "127.0.0.1:4221";
     let listener = TcpListener::bind(listen_addr).await?;
     eprintln!("Listening on {listen_addr}");
+    eprintln!("Routes: {router:?}");
     loop {
         let (mut stream, addr) = listener.accept().await?;
         let mut stream = Pin::new(&mut stream);
         eprintln!("Accepted new connection from {addr}");
 
         let request = HttpRequest::deserialize(&mut stream).await?;
-        let response = try_handle_request(request).await.unwrap_or_else(|err| {
+        let mut response = {
+            let request = request.parse()?;
+            router.execute(&request)
+        }
+        .unwrap_or_else(|err| {
             eprintln!("Error while handling request {err}");
             HttpResponse::new(HttpStatus::InternalServerError)
         });
