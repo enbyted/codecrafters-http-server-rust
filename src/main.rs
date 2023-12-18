@@ -1,3 +1,6 @@
+use std::pin::Pin;
+
+use http_server_starter_rust::{HttpResponse, HttpStatus};
 use tokio::net::TcpListener;
 use anyhow::Result;
 
@@ -7,7 +10,11 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
     eprintln!("Listening on {listen_addr}");
     loop {
-        let (_stream, addr) = listener.accept().await?;
+        let (mut stream, addr) = listener.accept().await?;
+        let stream = Pin::new(&mut stream);
         eprintln!("Accepted new connection from {addr}");
+        
+        let response = HttpResponse::new(HttpStatus::Ok);
+        response.serialize(stream).await?;
     }
 }
