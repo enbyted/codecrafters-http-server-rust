@@ -1,7 +1,8 @@
 use std::{collections::HashMap, net::TcpStream, pin::Pin};
 
 use http_server_starter_rust::{
-    HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest, Result,
+    Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest,
+    Result,
 };
 use itertools::Itertools;
 use tokio::{io::AsyncRead, net::TcpListener};
@@ -139,12 +140,26 @@ fn handle_echo(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
     Ok(resp)
 }
 
+fn handle_user_agent(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+    if let Some(user_agent) = req.header(Header::UserAgent) {
+        let mut resp = HttpResponse::new(HttpStatus::Ok);
+        resp.set_content(HttpContent::Plain(user_agent.clone()));
+        Ok(resp)
+    } else {
+        Ok(HttpResponse::new(HttpStatus::BadRequest))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut router = Router::new();
 
     router.add_route(RouteInfo::new(HttpMethod::GET, "/"), handle_root);
     router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/*"), handle_echo);
+    router.add_route(
+        RouteInfo::new(HttpMethod::GET, "/user-agent"),
+        handle_user_agent,
+    );
 
     let listen_addr = "127.0.0.1:4221";
     let listener = TcpListener::bind(listen_addr).await?;

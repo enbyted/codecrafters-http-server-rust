@@ -31,6 +31,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Header {
     ContentLength,
     ContentType,
+    UserAgent,
     Custom(String),
 }
 
@@ -161,6 +162,7 @@ impl Header {
         let header = match key.as_str() {
             "content-length" => Header::ContentLength,
             "content-type" => Header::ContentType,
+            "user-agent" => Header::UserAgent,
             _ => Header::Custom(key),
         };
 
@@ -171,6 +173,7 @@ impl Header {
         let key = match self {
             Header::ContentLength => "Content-Length",
             Header::ContentType => "Content-Type",
+            Header::UserAgent => "User-Agent",
             Header::Custom(value) => value.as_str(),
         };
 
@@ -349,6 +352,7 @@ impl HttpMethod {
 pub struct ParsedHttpRequest<'request> {
     method: HttpMethod,
     path: Vec<Cow<'request, str>>,
+    headers: &'request HashMap<Header, String>,
 }
 
 impl<'request> ParsedHttpRequest<'request> {
@@ -376,7 +380,11 @@ impl<'request> ParsedHttpRequest<'request> {
                 }
             })
             .collect::<Result<_>>()?;
-        Ok(ParsedHttpRequest { method, path })
+        Ok(ParsedHttpRequest {
+            method,
+            path,
+            headers: &input.headers,
+        })
     }
 
     pub fn method(&self) -> HttpMethod {
@@ -385,5 +393,9 @@ impl<'request> ParsedHttpRequest<'request> {
 
     pub fn path(&self) -> impl Iterator<Item = &str> {
         self.path.iter().map(|s| s.as_ref())
+    }
+
+    pub fn header(&self, header: Header) -> Option<&String> {
+        self.headers.get(&header)
     }
 }
