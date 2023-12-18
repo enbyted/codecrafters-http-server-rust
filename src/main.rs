@@ -1,8 +1,18 @@
-use std::pin::Pin;
+use std::{net::TcpStream, pin::Pin};
 
-use http_server_starter_rust::{HttpResponse, HttpStatus};
-use tokio::net::TcpListener;
-use anyhow::Result;
+use http_server_starter_rust::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, Result};
+use tokio::{io::AsyncRead, net::TcpListener};
+
+async fn try_handle_request(request: HttpRequest) -> Result<HttpResponse> {
+    let request = request.parse()?;
+    let response = if request.method() == HttpMethod::GET && request.path() == "/" {
+        HttpResponse::new(HttpStatus::Ok)
+    } else {
+        HttpResponse::new(HttpStatus::NotFound)
+    };
+
+    Ok(response)
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,10 +21,15 @@ async fn main() -> Result<()> {
     eprintln!("Listening on {listen_addr}");
     loop {
         let (mut stream, addr) = listener.accept().await?;
-        let stream = Pin::new(&mut stream);
+        let mut stream = Pin::new(&mut stream);
         eprintln!("Accepted new connection from {addr}");
-        
-        let response = HttpResponse::new(HttpStatus::Ok);
-        response.serialize(stream).await?;
+
+        let request = HttpRequest::deserialize(&mut stream).await?;
+        let response = try_handle_request(request).await.unwrap_or_else(|err| {
+            eprintln!("Error while handling request {err}");
+            HttpResponse::new(HttpStatus::InternalServerError)
+        });
+
+        response.serialize(&mut stream).await?;
     }
 }
