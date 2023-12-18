@@ -1,11 +1,11 @@
-use std::{collections::HashMap, net::TcpStream, pin::Pin};
+use std::{collections::HashMap, pin::Pin};
 
 use http_server_starter_rust::{
     Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest,
     Result,
 };
 use itertools::Itertools;
-use tokio::{io::AsyncRead, net::TcpListener};
+use tokio::net::TcpListener;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum MatchSegment {
@@ -130,7 +130,7 @@ impl Route for Router {
     }
 }
 
-fn handle_root(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
+fn handle_root(_req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
     Ok(HttpResponse::new(HttpStatus::Ok))
 }
 

@@ -35,6 +35,7 @@ pub enum Header {
     Custom(String),
 }
 
+#[allow(dead_code)]
 fn to_hex(val: u8) -> [char; 2] {
     fn digit(d: u8) -> char {
         if d <= 9 {
@@ -49,6 +50,7 @@ fn to_hex(val: u8) -> [char; 2] {
     [digit((val >> 4) & 0x0F), digit(val & 0x0F)]
 }
 
+#[allow(dead_code)]
 fn urlencode<'a>(value: &'a str) -> Cow<'a, str> {
     let mut encoded = String::with_capacity(value.len());
     let mut changed = false;
