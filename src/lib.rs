@@ -1,6 +1,7 @@
 use itertools::Itertools;
 #[warn(missing_debug_implementations)]
 use std::pin::Pin;
+use std::string::FromUtf8Error;
 use thiserror::Error;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -8,6 +9,8 @@ use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub enum Error {
     #[error("I/O Error")]
     IoError(#[from] io::Error),
+    #[error("Failed to decode utf-8 stream")]
+    Utf8Error(#[from] FromUtf8Error),
     #[error("Unknown HTTP method '{0}'")]
     UnknownMethod(String),
     #[error("Invalid status line '{0}'")]
@@ -92,7 +95,7 @@ impl HttpRequest {
         ParsedHttpRequest::new(self)
     }
 
-    async fn read_line(stream: &mut Pin<&mut impl AsyncRead>) -> io::Result<String> {
+    async fn read_line(stream: &mut Pin<&mut impl AsyncRead>) -> Result<String> {
         let mut buffer = Vec::new();
         loop {
             let byte = stream.read_u8().await?;
@@ -105,7 +108,7 @@ impl HttpRequest {
             buffer.push(byte);
         }
 
-        String::from_utf8(buffer).map_err(|err| io::Error::other(err))
+        Ok(String::from_utf8(buffer)?)
     }
 }
 
