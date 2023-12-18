@@ -10,13 +10,21 @@ use tokio::{io::AsyncRead, net::TcpListener};
 enum MatchSegment {
     Const(&'static str),
     Var,
+    All,
 }
 
 impl MatchSegment {
     fn matches(&self, value: Option<&str>) -> bool {
         match self {
-            Self::Var => value.is_some(),
+            Self::All | Self::Var => value.is_some(),
             Self::Const(v) => value.map(|value| value == *v).unwrap_or(false),
+        }
+    }
+
+    fn accepts_everything(&self) -> bool {
+        match self {
+            Self::All => true,
+            _ => false,
         }
     }
 }
@@ -36,6 +44,8 @@ impl RouteInfo {
                     None
                 } else if segment.starts_with(':') {
                     Some(MatchSegment::Var)
+                } else if segment.starts_with('*') {
+                    Some(MatchSegment::All)
                 } else {
                     Some(MatchSegment::Const(segment))
                 }
@@ -51,15 +61,20 @@ impl RouteInfo {
 
     fn match_path<'a>(&self, mut path: impl Iterator<Item = &'a str>) -> bool {
         let mut was_none = false;
+        let mut allows_overflow = false;
         for segment in &self.path {
             let v = if was_none { None } else { path.next() };
             was_none = v.is_none();
             if !segment.matches(v) {
                 return false;
             }
+            allows_overflow = segment.accepts_everything();
+            if allows_overflow {
+                break;
+            }
         }
 
-        return was_none || path.next().is_none();
+        return allows_overflow || was_none || path.next().is_none();
     }
 }
 
@@ -119,13 +134,9 @@ fn handle_root(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
 }
 
 fn handle_echo(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
-    if let Some((_, value)) = req.path().collect_tuple() {
-        let mut resp = HttpResponse::new(HttpStatus::Ok);
-        resp.set_content(HttpContent::Plain(value.into()));
-        Ok(resp)
-    } else {
-        Ok(HttpResponse::new(HttpStatus::BadRequest))
-    }
+    let mut resp = HttpResponse::new(HttpStatus::Ok);
+    resp.set_content(HttpContent::Plain(req.path().skip(1).join("/")));
+    Ok(resp)
 }
 
 #[tokio::main]
@@ -133,7 +144,7 @@ async fn main() -> Result<()> {
     let mut router = Router::new();
 
     router.add_route(RouteInfo::new(HttpMethod::GET, "/"), handle_root);
-    router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/:"), handle_echo);
+    router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/*"), handle_echo);
 
     let listen_addr = "127.0.0.1:4221";
     let listener = TcpListener::bind(listen_addr).await?;
