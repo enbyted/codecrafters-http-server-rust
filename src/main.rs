@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
             if args[1] == "--directory" {
                 eprintln!("Adding directory route for {}", args[2]);
                 router.add_route(
-                    RouteInfo::new(HttpMethod::GET, "/files"),
+                    RouteInfo::new(HttpMethod::GET, "/files/*"),
                     FileResolver(args[2].clone().into()),
                 );
             } else {
