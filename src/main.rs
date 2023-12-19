@@ -187,6 +187,7 @@ impl Route for FileResolver {
     fn execute<'data>(&mut self, request: &ParsedHttpRequest<'data>) -> Result<HttpResponse> {
         let file_path = request.path().skip(1).join("/");
         let file_path = self.0.join(file_path);
+        eprintln!("Trying to read file {file_path:?}");
         match std::fs::read(file_path) {
             Ok(data) => {
                 let mut response = HttpResponse::new(HttpStatus::Ok);
@@ -194,6 +195,7 @@ impl Route for FileResolver {
                 Ok(response)
             }
             Err(err) => {
+                eprintln!("Failed: {err}");
                 if err.kind() == std::io::ErrorKind::NotFound {
                     Ok(HttpResponse::new(HttpStatus::NotFound))
                 } else {
