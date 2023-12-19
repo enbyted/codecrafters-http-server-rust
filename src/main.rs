@@ -163,6 +163,7 @@ async fn handle_request_result(
 
     let request = HttpRequest::deserialize(stream).await?;
     let request = request.parse()?;
+    eprintln!("Handling request {request:?}");
     router.lock().await.execute(&request)
 }
 
@@ -203,7 +204,9 @@ impl Route for FileResolver {
     }
 }
 
-fn print_usage() {}
+fn print_usage(prog: &str) {
+    println!("Usage: {prog} [--directory <serve root>]");
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -227,13 +230,13 @@ async fn main() -> Result<()> {
                     FileResolver(args[2].clone().into()),
                 );
             } else {
-                print_usage();
+                print_usage(&args[0]);
                 return Ok(());
             }
         } else if args.len() == 1 {
             // Nothing
         } else {
-            print_usage();
+            print_usage(&args[0]);
             return Ok(());
         }
     }
