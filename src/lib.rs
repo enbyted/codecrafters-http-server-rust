@@ -485,4 +485,8 @@ impl<'request> ParsedHttpRequest<'request> {
     pub fn content_urldecoded(&self) -> Result<Vec<u8>> {
         urldecode_bytes(str::from_utf8(self.content)?)
     }
+
+    pub fn content(&self) -> &[u8] {
+        self.content
+    }
 }

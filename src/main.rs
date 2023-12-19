@@ -215,6 +215,7 @@ impl Route for FilePoster {
 
         let content = match request.header(Header::ContentType).map(|s| s.as_str()) {
             Some("application/x-www-form-urlencoded") => request.content_urldecoded().ok(),
+            None => Some(request.content().to_owned()),
             _ => None,
         };
         if let Some(content) = content {
