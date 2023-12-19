@@ -1,7 +1,12 @@
 use itertools::Itertools;
 #[warn(missing_debug_implementations)]
 use std::pin::Pin;
-use std::{borrow::Cow, collections::HashMap, str, string::FromUtf8Error};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    str::{self, Utf8Error},
+    string::FromUtf8Error,
+};
 use thiserror::Error;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -10,7 +15,9 @@ pub enum Error {
     #[error("I/O Error")]
     IoError(#[from] io::Error),
     #[error("Failed to decode utf-8 stream")]
-    Utf8Error(#[from] FromUtf8Error),
+    FromUtf8Error(#[from] FromUtf8Error),
+    #[error("Failed to decode utf-8 stream")]
+    Utf8Error(#[from] Utf8Error),
     #[error("Unknown HTTP method '{0}'")]
     UnknownMethod(String),
     #[error("Invalid status line '{0}'")]
@@ -154,6 +161,56 @@ fn urldecode(input: &str) -> Result<Cow<'_, str>> {
     }
 }
 
+fn urldecode_bytes(input: &str) -> Result<Vec<u8>> {
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut chars = input.chars();
+
+    fn from_hex_digit(digit: char) -> Option<u8> {
+        match digit {
+            '0'..='9' => Some(digit as u8 - b'0'),
+            'A'..='F' => Some(digit as u8 - b'A' + 10),
+            'a'..='f' => Some(digit as u8 - b'a' + 10),
+            _ => None,
+        }
+    }
+
+    fn read_hex(iter: &mut impl Iterator<Item = char>, whole_string: &str) -> Result<u8> {
+        let msb = iter
+            .next()
+            .ok_or_else(|| Error::UnexpectedEndOfUrlEncodedString(whole_string.into()))?;
+        let lsb = iter
+            .next()
+            .ok_or_else(|| Error::UnexpectedEndOfUrlEncodedString(whole_string.into()))?;
+
+        let msb = from_hex_digit(msb).ok_or_else(|| {
+            Error::InvalidUrlEncodedSequence(format!("{msb}{lsb}"), whole_string.into())
+        })?;
+        let lsb = from_hex_digit(lsb).ok_or_else(|| {
+            Error::InvalidUrlEncodedSequence(format!("{msb}{lsb}"), whole_string.into())
+        })?;
+
+        Ok((msb << 4) | lsb)
+    }
+
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let value = read_hex(&mut chars, input)?;
+            decoded.push(value);
+        } else if ch == '+' {
+            decoded.push(b' ');
+        } else if ch.is_ascii() {
+            decoded.push(ch as u8);
+        } else {
+            return Err(Error::InvalidUrlEncodedSequence(
+                format!("{ch}"),
+                input.into(),
+            ));
+        }
+    }
+
+    Ok(decoded)
+}
+
 impl Header {
     fn parse(input: &str) -> Result<(Header, &str)> {
         let (key, value) = input
@@ -191,6 +248,7 @@ impl Header {
 #[derive(Debug, Clone)]
 pub enum HttpStatus {
     Ok = 200,
+    Created = 201,
     BadRequest = 400,
     NotFound = 404,
     InternalServerError = 500,
@@ -200,6 +258,7 @@ impl HttpStatus {
     async fn serialize(&self, stream: &mut Pin<&mut impl AsyncWrite>) -> io::Result<()> {
         let text = match self {
             HttpStatus::Ok => "OK",
+            HttpStatus::Created => "Created",
             HttpStatus::BadRequest => "Bad request",
             HttpStatus::NotFound => "Not found",
             HttpStatus::InternalServerError => "Internal server error",
@@ -292,6 +351,7 @@ impl HttpResponse {
 pub struct HttpRequest {
     status_line: String,
     headers: HashMap<Header, String>,
+    content: Vec<u8>,
 }
 
 impl HttpRequest {
@@ -313,9 +373,22 @@ impl HttpRequest {
             }
         }
 
+        let content = if let Some(content_length) = headers
+            .get(&Header::ContentLength)
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            let mut buf = Vec::with_capacity(content_length);
+            buf.resize(content_length, 0);
+            stream.read_exact(&mut buf).await?;
+            buf
+        } else {
+            Vec::new()
+        };
+
         Ok(HttpRequest {
             status_line,
             headers,
+            content,
         })
     }
 
@@ -343,12 +416,14 @@ impl HttpRequest {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum HttpMethod {
     GET,
+    POST,
 }
 
 impl HttpMethod {
     fn parse(input: &str) -> Result<HttpMethod> {
         match input.trim().to_ascii_uppercase().as_str() {
             "GET" => Ok(HttpMethod::GET),
+            "POST" => Ok(HttpMethod::POST),
             _ => Err(Error::UnknownMethod(input.into())),
         }
     }
@@ -359,6 +434,7 @@ pub struct ParsedHttpRequest<'request> {
     method: HttpMethod,
     path: Vec<Cow<'request, str>>,
     headers: &'request HashMap<Header, String>,
+    content: &'request [u8],
 }
 
 impl<'request> ParsedHttpRequest<'request> {
@@ -390,6 +466,7 @@ impl<'request> ParsedHttpRequest<'request> {
             method,
             path,
             headers: &input.headers,
+            content: &input.content,
         })
     }
 
@@ -403,5 +480,9 @@ impl<'request> ParsedHttpRequest<'request> {
 
     pub fn header(&self, header: Header) -> Option<&String> {
         self.headers.get(&header)
+    }
+
+    pub fn content_urldecoded(&self) -> Result<Vec<u8>> {
+        urldecode_bytes(str::from_utf8(self.content)?)
     }
 }

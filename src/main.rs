@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, pin::Pin};
 
 use http_server_starter_rust::{
-    Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest,
-    Result,
+    Error, Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus,
+    ParsedHttpRequest, Result,
 };
 use itertools::Itertools;
 use std::net::SocketAddr;
@@ -206,6 +206,28 @@ impl Route for FileResolver {
     }
 }
 
+struct FilePoster(PathBuf);
+
+impl Route for FilePoster {
+    fn execute<'data>(&mut self, request: &ParsedHttpRequest<'data>) -> Result<HttpResponse> {
+        let file_path = request.path().skip(1).join("/");
+        let file_path = self.0.join(file_path);
+
+        let content = match request.header(Header::ContentType).map(|s| s.as_str()) {
+            Some("application/x-www-form-urlencoded") => request.content_urldecoded().ok(),
+            _ => None,
+        };
+        if let Some(content) = content {
+            eprintln!("Trying to write file {file_path:?}");
+            Ok(std::fs::write(file_path, &content)
+                .map(|_| HttpResponse::new(HttpStatus::Created))?)
+        } else {
+            eprintln!("Failed to read data from request");
+            Ok(HttpResponse::new(HttpStatus::BadRequest))
+        }
+    }
+}
+
 fn print_usage(prog: &str) {
     println!("Usage: {prog} [--directory <serve root>]");
 }
@@ -230,6 +252,10 @@ async fn main() -> Result<()> {
                 router.add_route(
                     RouteInfo::new(HttpMethod::GET, "/files/*"),
                     FileResolver(args[2].clone().into()),
+                );
+                router.add_route(
+                    RouteInfo::new(HttpMethod::POST, "/files/*"),
+                    FilePoster(args[2].clone().into()),
                 );
             } else {
                 print_usage(&args[0]);
