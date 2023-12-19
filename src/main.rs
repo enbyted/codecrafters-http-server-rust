@@ -5,7 +5,11 @@ use http_server_starter_rust::{
     Result,
 };
 use itertools::Itertools;
-use tokio::net::TcpListener;
+use std::net::SocketAddr;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 enum MatchSegment {
@@ -83,7 +87,7 @@ trait Route {
     fn execute<'data>(&mut self, request: &ParsedHttpRequest<'data>) -> Result<HttpResponse>;
 }
 
-impl std::fmt::Debug for dyn Route {
+impl std::fmt::Debug for dyn Route + Send {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("[Route]")
     }
@@ -97,7 +101,7 @@ impl<T: FnMut(&ParsedHttpRequest<'_>) -> Result<HttpResponse>> Route for T {
 
 #[derive(Debug)]
 struct Router {
-    routes: HashMap<RouteInfo, Box<dyn Route>>,
+    routes: HashMap<RouteInfo, Box<dyn Route + Send>>,
 }
 
 impl Router {
@@ -109,7 +113,7 @@ impl Router {
 
     fn add_route<T>(&mut self, route: RouteInfo, handler: T)
     where
-        T: Route + 'static,
+        T: Route + Send + 'static,
     {
         self.routes.insert(route, Box::new(handler));
     }
@@ -150,36 +154,51 @@ fn handle_user_agent(req: &ParsedHttpRequest<'_>) -> Result<HttpResponse> {
     }
 }
 
+async fn handle_request_result(
+    stream: &mut Pin<&mut TcpStream>,
+    addr: SocketAddr,
+    router: &Mutex<Router>,
+) -> Result<HttpResponse> {
+    eprintln!("Accepted new connection from {addr}");
+
+    let request = HttpRequest::deserialize(stream).await?;
+    let request = request.parse()?;
+    router.lock().await.execute(&request)
+}
+
+async fn handle_request(mut stream: TcpStream, addr: SocketAddr, router: &Mutex<Router>) {
+    let mut stream = Pin::new(&mut stream);
+    let mut response = handle_request_result(&mut stream, addr, router)
+        .await
+        .unwrap_or_else(|err| {
+            eprintln!("Error while handling request {err}");
+            HttpResponse::new(HttpStatus::InternalServerError)
+        });
+    response
+        .serialize(&mut stream)
+        .await
+        .unwrap_or_else(|e| eprintln!("Error while sending response {e}"));
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut router = Router::new();
+    let router = Box::leak(Box::new(Mutex::new(Router::new())));
 
-    router.add_route(RouteInfo::new(HttpMethod::GET, "/"), handle_root);
-    router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/*"), handle_echo);
-    router.add_route(
-        RouteInfo::new(HttpMethod::GET, "/user-agent"),
-        handle_user_agent,
-    );
-
+    {
+        let router = router.get_mut();
+        router.add_route(RouteInfo::new(HttpMethod::GET, "/"), handle_root);
+        router.add_route(RouteInfo::new(HttpMethod::GET, "/echo/*"), handle_echo);
+        router.add_route(
+            RouteInfo::new(HttpMethod::GET, "/user-agent"),
+            handle_user_agent,
+        );
+    }
     let listen_addr = "127.0.0.1:4221";
     let listener = TcpListener::bind(listen_addr).await?;
     eprintln!("Listening on {listen_addr}");
     eprintln!("Routes: {router:?}");
     loop {
-        let (mut stream, addr) = listener.accept().await?;
-        let mut stream = Pin::new(&mut stream);
-        eprintln!("Accepted new connection from {addr}");
-
-        let request = HttpRequest::deserialize(&mut stream).await?;
-        let mut response = {
-            let request = request.parse()?;
-            router.execute(&request)
-        }
-        .unwrap_or_else(|err| {
-            eprintln!("Error while handling request {err}");
-            HttpResponse::new(HttpStatus::InternalServerError)
-        });
-
-        response.serialize(&mut stream).await?;
+        let (stream, addr) = listener.accept().await?;
+        tokio::spawn(handle_request(stream, addr, router));
     }
 }
