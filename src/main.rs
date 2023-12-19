@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin};
+use std::{collections::HashMap, path::PathBuf, pin::Pin};
 
 use http_server_starter_rust::{
     Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus, ParsedHttpRequest,
@@ -180,6 +180,31 @@ async fn handle_request(mut stream: TcpStream, addr: SocketAddr, router: &Mutex<
         .unwrap_or_else(|e| eprintln!("Error while sending response {e}"));
 }
 
+struct FileResolver(PathBuf);
+
+impl Route for FileResolver {
+    fn execute<'data>(&mut self, request: &ParsedHttpRequest<'data>) -> Result<HttpResponse> {
+        let file_path = request.path().skip(1).join("/");
+        let file_path = self.0.join(file_path);
+        match std::fs::read(file_path) {
+            Ok(data) => {
+                let mut response = HttpResponse::new(HttpStatus::Ok);
+                response.set_content(HttpContent::OctedStream(data));
+                Ok(response)
+            }
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Ok(HttpResponse::new(HttpStatus::NotFound))
+                } else {
+                    Err(err.into())
+                }
+            }
+        }
+    }
+}
+
+fn print_usage() {}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let router = Box::leak(Box::new(Mutex::new(Router::new())));
@@ -192,6 +217,25 @@ async fn main() -> Result<()> {
             RouteInfo::new(HttpMethod::GET, "/user-agent"),
             handle_user_agent,
         );
+
+        let args = std::env::args().collect_vec();
+        if args.len() == 3 {
+            if args[1] == "--directory" {
+                eprintln!("Adding directory route for {}", args[2]);
+                router.add_route(
+                    RouteInfo::new(HttpMethod::GET, "/files"),
+                    FileResolver(args[2].clone().into()),
+                );
+            } else {
+                print_usage();
+                return Ok(());
+            }
+        } else if args.len() == 1 {
+            // Nothing
+        } else {
+            print_usage();
+            return Ok(());
+        }
     }
     let listen_addr = "127.0.0.1:4221";
     let listener = TcpListener::bind(listen_addr).await?;

@@ -217,6 +217,7 @@ impl HttpStatus {
 pub enum HttpContent {
     Empty,
     Plain(String),
+    OctedStream(Vec<u8>),
 }
 
 impl HttpContent {
@@ -224,6 +225,7 @@ impl HttpContent {
         match self {
             HttpContent::Empty => "text/plain",
             HttpContent::Plain(_) => "text/plain",
+            HttpContent::OctedStream(_) => "application/octet-stream",
         }
     }
 
@@ -231,6 +233,7 @@ impl HttpContent {
         match self {
             HttpContent::Empty => 0,
             HttpContent::Plain(text) => text.len(),
+            HttpContent::OctedStream(data) => data.len(),
         }
     }
 
@@ -238,6 +241,7 @@ impl HttpContent {
         match self {
             HttpContent::Empty => {}
             HttpContent::Plain(text) => stream.write_all(text.as_bytes()).await?,
+            HttpContent::OctedStream(data) => stream.write_all(&data).await?,
         }
 
         Ok(())
