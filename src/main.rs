@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, pin::Pin};
 
 use http_server_starter_rust::{
-    Error, Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus,
-    ParsedHttpRequest, Result,
+    AcceptedEncoding, Error, Header, HttpContent, HttpMethod, HttpRequest, HttpResponse,
+    HttpStatus, ParsedHttpRequest, Result,
 };
 use itertools::Itertools;
 use std::net::SocketAddr;
@@ -164,7 +164,16 @@ async fn handle_request_result(
     let request = HttpRequest::deserialize(stream).await?;
     let request = request.parse()?;
     eprintln!("Handling request {request:?}");
-    router.lock().await.execute(&request)
+    router.lock().await.execute(&request).map(|mut response| {
+        if request
+            .accepted_encodings()
+            .contains(&AcceptedEncoding::Gzip)
+        {
+            response.encode_gzip();
+        }
+
+        response
+    })
 }
 
 async fn handle_request(mut stream: TcpStream, addr: SocketAddr, router: &Mutex<Router>) {
