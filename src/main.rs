@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, pin::Pin};
 
 use http_server_starter_rust::{
-    AcceptedEncoding, Error, Header, HttpContent, HttpMethod, HttpRequest, HttpResponse,
-    HttpStatus, ParsedHttpRequest, Result,
+    AcceptedEncoding, Header, HttpContent, HttpMethod, HttpRequest, HttpResponse, HttpStatus,
+    ParsedHttpRequest, Result,
 };
 use itertools::Itertools;
 use std::net::SocketAddr;
