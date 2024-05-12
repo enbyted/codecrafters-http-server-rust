@@ -143,7 +143,18 @@ pub enum ResponseEncoding {
 }
 
 impl ResponseEncoding {
-    async fn encode(&mut self) -> Result<()> {
+    async fn encode(&mut self, content: &HttpContent) -> Result<()> {
+        match self {
+            ResponseEncoding::Normal => {}
+            ResponseEncoding::Gzip { encoded_data } => {
+                encoded_data.clear();
+                let mut encoder = async_compression::tokio::write::GzipEncoder::new(
+                    std::io::Cursor::new(encoded_data),
+                );
+                content.serialize(&mut Pin::new(&mut encoder)).await?;
+                encoder.shutdown().await?;
+            }
+        }
         // do nothing for now
         Ok(())
     }
@@ -153,8 +164,8 @@ impl ResponseEncoding {
             ResponseEncoding::Normal => {
                 headers.insert(Header::ContentLength, content.len().to_string());
             }
-            ResponseEncoding::Gzip { .. } => {
-                headers.insert(Header::ContentLength, content.len().to_string());
+            ResponseEncoding::Gzip { encoded_data } => {
+                headers.insert(Header::ContentLength, encoded_data.len().to_string());
                 headers.insert(Header::ContentEncoding, String::from("gzip"));
             }
         }
@@ -165,7 +176,10 @@ impl ResponseEncoding {
         content: &HttpContent,
         stream: &mut Pin<&mut impl AsyncWrite>,
     ) -> Result<()> {
-        content.serialize(stream).await
+        match self {
+            ResponseEncoding::Normal => content.serialize(stream).await,
+            ResponseEncoding::Gzip { encoded_data } => Ok(stream.write_all(encoded_data).await?),
+        }
     }
 }
 
@@ -202,7 +216,7 @@ impl HttpResponse {
             .entry(Header::ContentType)
             .or_insert_with(|| self.content.content_type().into());
 
-        self.encoding.encode().await?;
+        self.encoding.encode(&self.content).await?;
         self.encoding
             .update_headers(&self.content, &mut self.headers);
 
