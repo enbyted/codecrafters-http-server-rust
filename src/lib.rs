@@ -90,7 +90,7 @@ impl HttpStatus {
             HttpStatus::Ok => "OK",
             HttpStatus::Created => "Created",
             HttpStatus::BadRequest => "Bad request",
-            HttpStatus::NotFound => "Not found",
+            HttpStatus::NotFound => "Not Found",
             HttpStatus::InternalServerError => "Internal server error",
         };
 
